@@ -1,0 +1,150 @@
+name: publish
+
+# A version tag (0.1.0, no "v") checks the keygrant package, then publishes it to pub.dev through pub.dev's
+# automated publishing: dart-lang/setup-dart exchanges the run's identity token for pub.dev's, and no token
+# is stored anywhere. The build job cannot request an identity token; the publish job, which can, runs
+# Flutter's own tool and nothing of the package's dependencies' code. A version already on pub.dev is skipped.
+#
+# Off until it is switched on: the publish job runs only when the repository variable PUB_DEV_PUBLISHING is
+# `on`, set once pub.dev holds the package and its admin page enables publishing from this repository with
+# the tag pattern {{version}}. Until then a run checks the package and publishes nothing.
+
+# Run by hand from the Actions tab, from the tag itself (Use workflow from: the tag), it publishes that tag
+# the same way, if pub.dev also enables publishing from workflow_dispatch events: the rescue for a tag whose
+# push started no run. Never from a branch: pub.dev refuses a run that is not on a tag.
+
+on:
+  push:
+    tags:
+      - '[0-9]+.[0-9]+.[0-9]+'
+      - '[0-9]+.[0-9]+.[0-9]+-*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-${{ github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  TAG: ${{ github.ref_name }}
+  RELEASE: KeyGrant Dart SDK
+  # Flutter at the release the package is tested with, its commit checked against the one Flutter's release
+  # list names (storage.googleapis.com/flutter_infra_release/releases/releases_linux.json).
+  FLUTTER_VERSION: 3.47.7
+  FLUTTER_COMMIT: abaf9c523780a608bd46686fd5e53740a07077f8
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      publish: ${{ steps.out.outputs.publish }}
+    defaults:
+      run:
+        working-directory: sdk-dart
+    steps:
+      - name: Check the run is for a version tag
+        working-directory: .
+        run: |
+          if [ "$GITHUB_REF_TYPE" != tag ] || ! [[ "$TAG" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Run this from a version tag (Use workflow from: the tag, such as 0.3.1), never from a branch."
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ env.TAG }}
+          persist-credentials: false
+      - name: Check the tag is a KeyGrant release
+        working-directory: .
+        run: |
+          # Only what the release pipeline made is published: an annotated tag by KeyGrant, on KeyGrant's
+          # release commit for this version. Its source commit ran the SDK's suite before the tag was pushed.
+          git fetch --quiet --no-tags --depth=1 origin "+refs/tags/$TAG:refs/tags/$TAG"
+          keygrant='KeyGrant <dev@keygrant.dev>'
+          if [ "$(git cat-file -t "refs/tags/$TAG")" != tag ] \
+            || [ "$(git for-each-ref --format='%(taggername) %(taggeremail)' "refs/tags/$TAG")" != "$keygrant" ] \
+            || [ "$(git log -1 --format='%an <%ae>|%cn <%ce>' "refs/tags/$TAG^{commit}")" != "$keygrant|$keygrant" ] \
+            || [ "$(git log -1 --format=%B "refs/tags/$TAG^{commit}")" != "$RELEASE $TAG" ]; then
+            echo "::error::$TAG is not a release the KeyGrant release pipeline made (an annotated tag by KeyGrant on its release commit): nothing is published."
+            exit 1
+          fi
+      - name: Check the tag is the package's version
+        run: |
+          version=$(sed -n 's/^version:[[:space:]]*\([^[:space:]#]*\).*/\1/p' pubspec.yaml)
+          if [ "$version" != "$TAG" ]; then
+            echo "::error::The tag $TAG is not the version in pubspec.yaml ($version)."
+            exit 1
+          fi
+      - name: Check whether pub.dev has it already
+        id: out
+        env:
+          PUB_DEV_PUBLISHING: ${{ vars.PUB_DEV_PUBLISHING }}
+        run: |
+          code=$(curl -sS --max-time 30 -o "$RUNNER_TEMP/versions.json" -w '%{http_code}' \
+            -H 'Accept: application/vnd.pub.v2+json' https://pub.dev/api/packages/keygrant) || code="no answer"
+          case "$code" in
+            404) out=true ;;
+            200) if jq -e --arg v "$TAG" 'any(.versions[]; .version == $v)' "$RUNNER_TEMP/versions.json" >/dev/null; then out=false; else out=true; fi ;;
+            *) echo "::error::pub.dev answered $code: cannot tell whether keygrant $TAG is out."; exit 1 ;;
+          esac
+          if [ "$out" = false ]; then echo "::notice::keygrant $TAG is already on pub.dev: nothing to publish."; fi
+          if [ "$out" = true ] && [ "$PUB_DEV_PUBLISHING" != on ]; then
+            echo "::notice::The repository variable PUB_DEV_PUBLISHING is not on, so keygrant $TAG is checked and not published."
+          fi
+          echo "publish=$out" >> "$GITHUB_OUTPUT"
+      - name: Flutter ${{ env.FLUTTER_VERSION }}
+        if: steps.out.outputs.publish == 'true'
+        working-directory: ${{ runner.temp }}
+        run: |
+          git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$FLUTTER_VERSION" https://github.com/flutter/flutter.git flutter
+          if [ "$(git -C flutter rev-parse HEAD)" != "$FLUTTER_COMMIT" ]; then
+            echo "::error::Flutter's tag $FLUTTER_VERSION is not at $FLUTTER_COMMIT."
+            exit 1
+          fi
+          echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
+      # No test suite here: the SDK's suite and its conformance vectors ran on the source commit this export was
+      # made from, before the tag was pushed. This job checks the package as pub.dev will hold it.
+      - name: Check the package
+        if: steps.out.outputs.publish == 'true'
+        run: |
+          flutter --disable-analytics
+          flutter --version
+          flutter pub get
+          flutter pub publish --dry-run
+
+  publish:
+    needs: build
+    if: needs.build.outputs.publish == 'true' && vars.PUB_DEV_PUBLISHING == 'on'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ env.TAG }}
+          persist-credentials: false
+      - name: Flutter ${{ env.FLUTTER_VERSION }}
+        working-directory: ${{ runner.temp }}
+        run: |
+          git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$FLUTTER_VERSION" https://github.com/flutter/flutter.git flutter
+          if [ "$(git -C flutter rev-parse HEAD)" != "$FLUTTER_COMMIT" ]; then
+            echo "::error::Flutter's tag $FLUTTER_VERSION is not at $FLUTTER_COMMIT."
+            exit 1
+          fi
+          echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
+      # Flutter fetches its Dart SDK and resolves the package before the identity token is made, so the token
+      # is used as soon as it exists.
+      - name: Resolve the package
+        working-directory: sdk-dart
+        run: |
+          flutter --disable-analytics
+          flutter pub get
+      # Makes the run's identity token for pub.dev and registers it with pub (PUB_TOKEN). Flutter's pub reads it.
+      - uses: dart-lang/setup-dart@6afc89df92d6eb3834022f73cd65adc8cdfcb92d # v1.8.1
+      - name: Publish to pub.dev
+        working-directory: sdk-dart
+        run: flutter pub publish --force
