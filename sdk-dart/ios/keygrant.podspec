@@ -4,7 +4,7 @@
 #
 Pod::Spec.new do |s|
   s.name             = 'keygrant'
-  s.version          = '0.1.0'
+  s.version          = '0.1.1'
   s.summary          = 'KeyGrant licensing for Flutter apps.'
   s.description      = <<-DESC
 The KeyGrant plugin's native side: the device id KeyGrant licenses are held to.

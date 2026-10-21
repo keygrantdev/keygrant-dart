@@ -77,7 +77,7 @@ a `LicenseConfigError` for a configuration it cannot use (no public key, both `p
 | `pickUp(String email)` | `PickUpCodeSent` or `PickUpSendFailed`: a code mailed to the address a key was sold to |
 | `confirmPickUp(String email, String code)` | `PickUpKeysFound(keys)` or `PickUpKeysFailed`: the address's keys of the product |
 | `restoreByEmail(String email, String code)` | `Restored` or `RestoreFailed(RestoreError)`: the code confirmed and the key that fits this build activated |
-| `upgradeUrl(String paymentLink)` | the payment link with this device's activation id as `client_reference_id` (never the key), or null with no activation |
+| `upgradeUrl(String paymentLink)` | the payment link with this device's activation id as `client_reference_id` (never the key), or null with no activation; with Paddle, your own checkout page, which gives `client_reference_id` to Paddle.js as custom data |
 
 Every error is an enum whose `wire` member is the word every KeyGrant SDK uses
 (`LicenseError.invalidKey.wire == 'invalid-key'`).

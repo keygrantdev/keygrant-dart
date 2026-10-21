@@ -1,6 +1,6 @@
 name: keygrant
 description: "KeyGrant licensing for Flutter apps: offline-verified leases, trials, licence files, metered uses and key pickup, on iOS, Android, Windows, macOS and Linux."
-version: 0.1.0
+version: 0.1.1
 homepage: https://keygrant.dev
 repository: https://github.com/keygrantdev/keygrant-dart/tree/main/sdk-dart
 issue_tracker: https://github.com/keygrantdev/keygrant-dart/issues

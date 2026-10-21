@@ -123,7 +123,9 @@ final class KeyGrantLicense extends _StatusEngine {
 
   /// `paymentLink` with this device's ACTIVATION id (never the key) as its one
   /// `client_reference_id`, or null when the device holds no activated licence.
-  /// Throws an [ArgumentError] for a link that is not an absolute URL.
+  /// Throws an [ArgumentError] for a link that is not an absolute URL. Selling
+  /// through Paddle, the link is the tenant's own checkout page, which gives
+  /// `client_reference_id` to Paddle.js as custom data under the same name.
   Future<String?> upgradeUrl(String paymentLink) async {
     // Read-only: this runs outside the one-at-a-time order, beside any call.
     final state = await _load(true);
